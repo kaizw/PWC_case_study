@@ -1,0 +1,173 @@
+---
+title: "Bibitor_Sales"
+author: "ZW"
+date: '2023-04-12'
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+## Load data files
+```{r}
+purchase_price <- read_csv("Case_Studies/Bibitor_PWC/2017PurchasePricesDec.csv")
+inventory_begin <- read_csv("Case_Studies/Bibitor_PWC/BegInvFINAL12312016.csv")
+inventory_end <- read_csv("Case_Studies/Bibitor_PWC/EndInvFINAL12312016.csv")
+invoice <- read_csv("Case_Studies/Bibitor_PWC/InvoicePurchases12312016.csv")
+purchase <- read_csv("Case_Studies/Bibitor_PWC/PurchasesFINAL12312016.csv")
+sale <- read_csv("Case_Studies/Bibitor_PWC/SalesFINAL12312016.csv")
+```
+
+## Generate summary files of inventory
+```{r}
+begin_inv <- inventory_begin %>% group_by (Brand) %>%
+  summarise(quantity_begin = sum(onHand)) %>%
+  select (Brand, quantity_begin)
+end_inv <- inventory_end %>% group_by(Brand) %>%
+  summarise (quantity_end = sum(onHand)) %>%
+  select (Brand, quantity_end)
+purchase_total <- purchase %>% group_by (Brand) %>%
+  summarise(quantity_bought = sum(Quantity)) %>%
+  select (Brand, quantity_bought)
+sale_total <- sale %>% group_by (Brand) %>%
+  summarise(quantity_sold = sum(SalesQuantity)) %>%
+  select (Brand, quantity_sold)
+```
+
+## Combine the four files above
+```{r}
+inventory_list <- list(begin_inv, end_inv, purchase_total, sale_total)
+inv_sum <- inventory_list %>% reduce (full_join, by = "Brand")
+inv_sum [is.na(inv_sum)] <- 0 #replace NA with 0.
+inv_sum <- inv_sum %>% mutate (quantity_sum = quantity_begin + quantity_bought - quantity_sold - quantity_end) #The results show that inventory is fully accounted for. 
+```
+
+## Sales by month
+```{r}
+sales_month <- sale %>% mutate (month = month(SalesDate, label=TRUE)) %>%
+  group_by(month) %>% summarise (dollars_month=sum(SalesDollars)) %>%
+  select (month, dollars_month)
+sales_month %>% ggplot(aes(x = month, y = dollars_month)) +
+  geom_bar(stat="identity", color="black", fill="gray70") + ggtitle("Sales by Month") +
+  ylab("Sales ($)") + xlab("Month")
+```
+
+## Purchase by month
+```{r}
+purchase_month <- purchase %>% mutate (month = month(ReceivingDate, label=TRUE)) %>%
+  group_by(month) %>% summarise (dollars_month=sum(Dollars)) %>%
+  select (month, dollars_month)
+purchase_month %>% ggplot(aes(x=month, y=dollars_month)) +
+  geom_bar(stat="identity",color="black", fill="gray70") + 
+  xlab("Month") + ylab("Purchase ($)") +
+  ggtitle("Purchases by Month")
+```
+
+
+## Calculate Gross Margin of each brand and generate summary and histogram
+```{r}
+purchase_price <- purchase_price %>% 
+  mutate (gross_margin = 100*(Price - PurchasePrice)/PurchasePrice) %>% 
+  arrange(gross_margin) %>% na.omit()
+summary(purchase_price$gross_margin)
+purchase_price %>% ggplot (aes(x=gross_margin)) + 
+  geom_histogram(aes(y=after_stat(density)), bins = 100, color = "black", fill = "red") +
+  ggtitle("Gross Profit Margin Distribution") + 
+  xlab("Gross Profit Margin (%)")
+```
+
+## Calculate sales and gross profit for each product and summary
+### The same product can have multiple brand IDs (e.g. different size of bottles) and each with its gross profit margin; gross profit for each brand will be calculated first.
+```{r}
+sales_brand <- sale %>% group_by(Brand, Description) %>%
+  summarise(sale_dollars = sum (SalesDollars), sale_quantity = sum (SalesQuantity)) %>%
+  select (Brand, Description, sale_dollars, sale_quantity) %>%
+  arrange (desc(sale_dollars))
+brand_margin <- purchase_price %>% select (Brand, gross_margin)
+sales_brand <- left_join(sales_brand, brand_margin, by = "Brand")
+sales_brand <- sales_brand %>% 
+  mutate (gross_profit = sale_dollars*(gross_margin/(100 + gross_margin))) %>%
+  na.omit() %>%
+  arrange (desc(gross_profit))
+sales_product <- sales_brand %>% group_by(Description) %>%
+  summarise(gross_profit_product = sum(gross_profit)) %>%
+  select(Description, gross_profit_product) %>%
+  na.omit() %>%
+  arrange(desc(gross_profit_product)) 
+summary(sales_product$gross_profit_product)
+sales_product[1:40,] %>%
+  ggplot(aes(x = reorder(Description,-gross_profit_product),y = gross_profit_product)) + geom_bar(stat="identity", color="black", fill="green") +
+  theme(axis.text.x = element_text(angle=90, size = 9)) +
+  ggtitle("Top 40 products by Gross Profit") +
+  xlab("") + ylab("Gross Profit ($)")
+# Profit of top 40 products over total profit
+sum(sales_product[1:40,]$gross_profit_product)/sum(sales_product$gross_profit_product)
+# Profit of top 200 products over total profit
+sum(sales_product[1:200,]$gross_profit_product)/sum(sales_product$gross_profit_product)
+# Profit of top 400 products over total profit
+sum(sales_product[1:400,]$gross_profit_product)/sum(sales_product$gross_profit_product)
+# Profit of top 4000 products over total profit
+sum(sales_product[1:4000,]$gross_profit_product)/sum(sales_product$gross_profit_product)
+```
+
+## Calculate total sales and gross profit of all stores
+```{r}
+sum(sale$SalesDollars) # total sales of all stores
+sum(sales_brand$gross_profit) # total gross profit
+sum(sales_brand$gross_profit)/sum(sale$SalesDollars) # overall gross profit margin
+```
+
+## Sales by store
+```{r}
+sales_store <- sale %>% group_by(Store) %>%
+  summarise(dollars_total = sum (SalesDollars)) %>%
+  select (Store, dollars_total) %>%
+  arrange(desc(dollars_total))
+summary(sales_store$dollars_total)
+sales_store$Store <- as.character(sales_store$Store)
+sales_store %>% ggplot(aes(x = reorder(Store, -dollars_total), y = dollars_total)) +
+  geom_bar(stat="identity", color = "black", fill = "green") +
+  theme(axis.text.x = element_text(angle=90, size = 9)) +
+  ggtitle("Sales by Store") + xlab ("Store Number") + ylab("Annual Sales ($)")
+sum(sales_store[1:20,]$dollars_total)/sum(sales_store$dollars_total) #Share of top 20 stores
+sum(sales_store[61:80,]$dollars_total)/sum(sales_store$dollars_total) #share of bottom 20 stores
+```
+
+## Gross profit margin of top 20 stores
+```{r}
+sale$Store <- as.character(sale$Store)
+top20_stores <- sales_store[1:20,]$Store
+sales_top20 <- sale %>% filter (Store == top20_stores) %>%
+  group_by(Brand, Description) %>% 
+  summarise(sale_dollars = sum (SalesDollars)) %>%
+  select (Brand, Description, sale_dollars)
+profit_top20 <- left_join(sales_top20, brand_margin, by="Brand") %>% 
+  mutate (gross_profit = sale_dollars*(gross_margin/(100 + gross_margin))) %>%
+  na.omit() %>% group_by (Description) %>%
+  summarise(gross_profit_product = sum(gross_profit)) %>%
+  select(Description, gross_profit_product) 
+# Gross profit margin of top 20 stores
+sum(sales_top20$sale_dollars) # Sales
+sum(profit_top20$gross_profit_product) # Gross profit
+sum(profit_top20$gross_profit_product)/sum(sales_top20$sale_dollars) # Ratio
+```
+
+## Gross profit margin of bottom 20 stores
+```{r}
+bottom20_stores <- sales_store[61:80,]$Store
+sales_bottom20 <- sale %>% filter (Store == bottom20_stores) %>%
+  group_by(Brand, Description) %>% 
+  summarise(sale_dollars = sum (SalesDollars)) %>%
+  select (Brand, Description, sale_dollars)
+profit_bottom20 <- left_join(sales_bottom20, brand_margin, by="Brand") %>% 
+  mutate (gross_profit = sale_dollars*(gross_margin/(100 + gross_margin))) %>%
+  na.omit() %>% group_by (Description) %>%
+  summarise(gross_profit_product = sum(gross_profit)) %>%
+  select(Description, gross_profit_product) 
+# Gross profit margin of bottom 20 stores
+sum(sales_bottom20$sale_dollars) # Sales
+sum(profit_bottom20$gross_profit_product) # Gross profit
+sum(profit_bottom20$gross_profit_product)/sum(sales_bottom20$sale_dollars) # Ratio
+```
+
